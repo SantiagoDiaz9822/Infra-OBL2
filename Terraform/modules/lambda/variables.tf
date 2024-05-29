@@ -1,9 +1,35 @@
-
-
-variable "bucket_name" {
-  description = "Name of the bucket."
+variable "function_name" {
+  description = "El nombre de la función Lambda"
+  type        = string
 }
 
-variable "force_destroy" {
-  description = "A boolean that indicates all objects should be deleted from the bucket so that the bucket can be destroyed without error."
+variable "handler" {
+  description = "El manejador de la función Lambda"
+  type        = string
+}
+
+variable "runtime" {
+  description = "El runtime de la función Lambda"
+  type        = string
+}
+
+variable "role_arn" {
+  description = "El ARN del rol IAM para la función Lambda"
+  type        = string
+}
+
+variable "s3_bucket" {
+  description = "El bucket S3 que contiene el código de la función Lambda"
+  type        = string
+}
+
+variable "s3_key" {
+  description = "La clave del objeto S3 que contiene el código de la función Lambda"
+  type        = string
+}
+
+variable "environment_variables" {
+  description = "Variables de entorno para la función Lambda"
+  type        = map(string)
+  default     = {}
 }
