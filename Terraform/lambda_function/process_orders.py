@@ -43,7 +43,7 @@ def process_order(order_data):
 
 def send_sqs_message(order_data):
     try:
-        response = sqs.sendMessageToSQS(
+        response = sqs.send_message(
             QueueUrl=SQS_QUEUE_URL,
             MessageBody=json.dumps(order_data)
         )
