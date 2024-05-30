@@ -1,4 +1,4 @@
-# Locales
+# Variables locales
 locals {
   VPC1ID = "vpc-0ccc796febac1affa"
 
@@ -73,6 +73,7 @@ locals {
 data "aws_vpc" "VPC1" {
   id = local.VPC1ID
 }
+
 data "aws_subnets" "Private-subnets" {
   filter {
     name   = "tag:Name"
@@ -129,7 +130,6 @@ resource "aws_iam_role" "lambda_role" {
       }
     ]
   })
-  
 }
 
 # Documento de política para permitir a Lambda asumir el rol
@@ -278,7 +278,6 @@ output "site_url" {
   value = "${aws_apigatewayv2_api.static_site_api.api_endpoint}/site"
 }
 
-
 # Crear una cola SQS para el servicio de notificación/mensajería desacoplado
 resource "aws_sqs_queue" "notification_queue" {
   name                      = "notification-queue"
@@ -311,7 +310,11 @@ resource "aws_s3_bucket_policy" "orders_bucket_policy" {
   })
 }
 
-# Crear una función Lambda para procesar los pedidos desde S3
+# Crear la función Lambda para procesar los pedidos desde S3
+data "aws_sqs_queue" "notification_queue" {
+  name = "notification-queue"
+}
+
 resource "aws_lambda_function" "process_orders_lambda" {
   filename      = "./process_orders.zip"
   function_name = "process-orders-lambda"
@@ -322,8 +325,14 @@ resource "aws_lambda_function" "process_orders_lambda" {
   environment {
     variables = {
       S3_BUCKET_NAME = aws_s3_bucket.orders_bucket.bucket
+      SQS_QUEUE_URL  = data.aws_sqs_queue.notification_queue.url
     }
   }
+}
+
+output "SQS_QUEUE_URL" {
+  value = data.aws_sqs_queue.notification_queue.url
+
 }
 
 # Configurar la política de permisos para la función Lambda
@@ -351,4 +360,29 @@ resource "aws_iam_policy" "lambda_sqs_policy" {
 resource "aws_iam_role_policy_attachment" "lambda_sqs_attachment" {
   role       = aws_iam_role.lambda_role.name
   policy_arn = aws_iam_policy.lambda_sqs_policy.arn
+}
+
+# Crear un trigger S3 para invocar la función Lambda al subir un objeto
+resource "aws_s3_bucket_notification" "orders_bucket_notification" {
+  bucket = aws_s3_bucket.orders_bucket.id
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.process_orders_lambda.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_suffix       = ".json"
+  }
+
+  depends_on = [aws_lambda_permission.s3_to_lambda]
+}
+
+resource "aws_lambda_permission" "s3_to_lambda" {
+  statement_id  = "AllowS3InvokeLambda"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.process_orders_lambda.arn
+  principal     = "s3.amazonaws.com"
+  source_arn    = aws_s3_bucket.orders_bucket.arn
+}
+
+output "order_bucket_name" {
+  value = aws_s3_bucket.orders_bucket.id
 }
