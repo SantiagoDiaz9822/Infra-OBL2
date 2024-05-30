@@ -1,5 +1,78 @@
 # Locales
+locals {
+  VPC1ID = "vpc-0ccc796febac1affa"
 
+  EC2_INSTANCES = [
+    {
+      ami_id = "ami-051f8a213df8bc089",
+      instance_type = "t2.micro",
+      instance_name = "Public instance",
+      instance_count = 1,
+      public = true,
+      enable_ipv6 = true,
+      security_group_rules = {
+        ingress = [
+          {
+            from_port         = 22,
+            to_port           = 22,
+            protocol          = "tcp",
+            cidr_blocks       = ["0.0.0.0/0"],
+            ipv6_cidr_blocks  = ["::/0"]
+          },
+          {
+            from_port         = 80,
+            to_port           = 80,
+            protocol          = "tcp",
+            cidr_blocks       = ["0.0.0.0/0"],
+            ipv6_cidr_blocks  = ["::/0"]
+          }
+        ],
+        egress = [
+          {
+            from_port         = 0,
+            to_port           = 0,
+            protocol          = "-1",
+            cidr_blocks       = ["0.0.0.0/0"],
+            ipv6_cidr_blocks  = ["::/0"]
+          }
+        ]
+      }
+    },
+    {
+      ami_id = "ami-058bd2d568351da34",
+      instance_type = "t2.micro",
+      instance_name = "Private instance",
+      instance_count = 1,
+      public = false,
+      enable_ipv6 = false,
+      security_group_rules = {
+        ingress = [
+          {
+            from_port         = 22,
+            to_port           = 22,
+            protocol          = "tcp",
+            cidr_blocks       = ["0.0.0.0/0"],
+            ipv6_cidr_blocks  = ["::/0"]
+          }
+        ],
+        egress = [
+          {
+            from_port         = 0,
+            to_port           = 0,
+            protocol          = "-1",
+            cidr_blocks       = ["0.0.0.0/0"],
+            ipv6_cidr_blocks  = ["::/0"]
+          }
+        ]
+      }
+    }
+  ]
+}
+
+# Recuperar información de la VPC y subredes
+data "aws_vpc" "VPC1" {
+  id = local.VPC1ID
+}
 data "aws_subnets" "Private-subnets" {
   filter {
     name   = "tag:Name"
@@ -56,6 +129,7 @@ resource "aws_iam_role" "lambda_role" {
       }
     ]
   })
+  
 }
 
 # Documento de política para permitir a Lambda asumir el rol
@@ -74,7 +148,7 @@ resource "aws_s3_bucket_policy" "lambda_access_policy" {
   bucket = aws_s3_bucket.static_website.id
 
   policy = jsonencode({
-    Version = "2012-10-17"
+    Version = "2012-10-17",
     Statement = [
       {
         Sid       = "PublicReadGetObject",
@@ -92,6 +166,23 @@ resource "aws_apigatewayv2_api" "static_site_api" {
   name          = "static-site-api"
   protocol_type = "HTTP"
 }
+
+# Crear las instancias EC2
+module "ec2" {
+  for_each = { for vm in local.EC2_INSTANCES : vm.instance_name => vm }
+  source   = "./modules/ec2"
+
+  subnet_id            = each.value.public ? data.aws_subnets.Public-subnets.ids[0] : data.aws_subnets.Private-subnets.ids[0]
+  ami_id               = each.value.ami_id
+  instance_type        = each.value.instance_type
+  instance_name        = each.value.instance_name
+  instance_count       = each.value.instance_count
+  ssh_bucket           = aws_s3_bucket.static_website.id
+  enable_ipv6          = each.value.enable_ipv6
+  vpc_id               = data.aws_vpc.VPC1.id
+  security_group_rules = each.value.security_group_rules
+}
+
 # Crear una integración con la función Lambda
 resource "aws_apigatewayv2_integration" "lambda_integration" {
   api_id                    = aws_apigatewayv2_api.static_site_api.id
@@ -99,6 +190,7 @@ resource "aws_apigatewayv2_integration" "lambda_integration" {
   integration_method        = "POST"
   integration_uri           = aws_lambda_function.static_site_lambda.invoke_arn
 }
+
 # Crear una ruta predeterminada para la API
 resource "aws_apigatewayv2_route" "api_route" {
   api_id    = aws_apigatewayv2_api.static_site_api.id
@@ -106,6 +198,7 @@ resource "aws_apigatewayv2_route" "api_route" {
 
   target = "integrations/${aws_apigatewayv2_integration.lambda_integration.id}"
 }
+
 # Crear un recurso de permiso para permitir a API Gateway invocar la función Lambda
 resource "aws_lambda_permission" "apigw" {
   statement_id  = "AllowExecutionFromAPIGateway"
@@ -115,9 +208,9 @@ resource "aws_lambda_permission" "apigw" {
 
   source_arn = "${aws_apigatewayv2_api.static_site_api.execution_arn}/*"
 }
+
 # Crear un despliegue de la API
 data "aws_region" "current" {}
-
 
 # Crear un recurso de rol IAM para la ejecución de la función Lambda
 resource "aws_iam_role" "lambda_exec" {
@@ -183,4 +276,79 @@ resource "aws_lambda_permission" "invoke_lambda" {
 # Probar el Sitio Institucional
 output "site_url" {
   value = "${aws_apigatewayv2_api.static_site_api.api_endpoint}/site"
+}
+
+
+# Crear una cola SQS para el servicio de notificación/mensajería desacoplado
+resource "aws_sqs_queue" "notification_queue" {
+  name                      = "notification-queue"
+  delay_seconds             = 0
+  max_message_size          = 262144
+  message_retention_seconds = 345600
+  visibility_timeout_seconds = 30
+}
+
+# Crear el Bucket S3 para subir pedidos
+resource "aws_s3_bucket" "orders_bucket" {
+  bucket_prefix = "orders-bucket"
+}
+
+# Configurar la Política de Bucket S3
+resource "aws_s3_bucket_policy" "orders_bucket_policy" {
+  bucket = aws_s3_bucket.orders_bucket.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid       = "PublicReadGetObject",
+        Effect    = "Allow",
+        Principal = "*",
+        Action    = "s3:GetObject",
+        Resource  = "${aws_s3_bucket.orders_bucket.arn}/*"
+      }
+    ]
+  })
+}
+
+# Crear una función Lambda para procesar los pedidos desde S3
+resource "aws_lambda_function" "process_orders_lambda" {
+  filename      = "./process_orders.zip"
+  function_name = "process-orders-lambda"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "process_orders.lambda_handler"
+  runtime       = "python3.8"
+
+  environment {
+    variables = {
+      S3_BUCKET_NAME = aws_s3_bucket.orders_bucket.bucket
+    }
+  }
+}
+
+# Configurar la política de permisos para la función Lambda
+resource "aws_iam_policy" "lambda_sqs_policy" {
+  name        = "lambda-sqs-policy"
+  description = "Policy for Lambda to access SQS"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = [
+          "sqs:SendMessage",
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage"
+        ],
+        Resource = "${aws_sqs_queue.notification_queue.arn}/*"
+      }
+    ]
+  })
+}
+
+# Adjuntar la política de permisos a la función Lambda
+resource "aws_iam_role_policy_attachment" "lambda_sqs_attachment" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_sqs_policy.arn
 }

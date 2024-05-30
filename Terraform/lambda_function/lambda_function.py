@@ -23,3 +23,8 @@ def lambda_handler(event, context):
             'statusCode': 500,
             'body': str(e)
         }
+
+import json
+import boto3
+
+sqs = boto3.client('sqs')
