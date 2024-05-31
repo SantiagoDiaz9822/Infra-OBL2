@@ -278,6 +278,10 @@ output "site_url" {
   value = "${aws_apigatewayv2_api.static_site_api.api_endpoint}/site"
 }
 
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------
+
+
 # Crear una cola SQS para el servicio de notificación/mensajería desacoplado
 resource "aws_sqs_queue" "notification_queue" {
   name                      = "notification-queue"
@@ -286,6 +290,10 @@ resource "aws_sqs_queue" "notification_queue" {
   message_retention_seconds = 345600
   visibility_timeout_seconds = 30
 }
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------
+
 
 # Crear el Bucket S3 para subir pedidos
 resource "aws_s3_bucket" "orders_bucket" {
@@ -372,17 +380,86 @@ resource "aws_s3_bucket_notification" "orders_bucket_notification" {
     filter_suffix       = ".json"
   }
 
-  depends_on = [aws_lambda_permission.s3_to_lambda]
+  depends_on = [aws_lambda_permission.s3_to_lambda_orders]
 }
 
-resource "aws_lambda_permission" "s3_to_lambda" {
-  statement_id  = "AllowS3InvokeLambda"
+# Permiso para permitir que el bucket S3 invoque la función Lambda para procesar pedidos
+resource "aws_lambda_permission" "s3_to_lambda_orders" {
+  statement_id  = "AllowS3InvokeLambdaOrders"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.process_orders_lambda.arn
   principal     = "s3.amazonaws.com"
   source_arn    = aws_s3_bucket.orders_bucket.arn
 }
-
 output "order_bucket_name" {
   value = aws_s3_bucket.orders_bucket.id
+}
+
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+# Crear el Bucket S3 para subir imagenes
+resource "aws_s3_bucket" "image_bucket" {
+  bucket_prefix = "image-bucket"
+}
+
+# Configurar la Política de Bucket S3
+resource "aws_s3_bucket_policy" "image_bucket_policy" {
+  bucket = aws_s3_bucket.image_bucket.id
+
+   policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid       = "PublicReadGetObject",
+        Effect    = "Allow",
+        Principal = "*",
+        Action    = "s3:GetObject",
+        Resource  = "${aws_s3_bucket.image_bucket.arn}/*"
+      }
+    ]
+  })
+  
+}
+
+resource "aws_lambda_function" "process_image_lambda" {
+  filename      = "./process_image.zip"
+  function_name = "process-image-lambda"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "process_image.lambda_handler"
+  runtime       = "python3.8"
+
+  environment {
+    variables = {
+      S3_BUCKET_NAME = aws_s3_bucket.image_bucket.bucket
+      SQS_QUEUE_URL  = data.aws_sqs_queue.notification_queue.url
+    }
+  }
+}
+
+# Crear un trigger S3 para invocar la función Lambda al subir un objeto
+resource "aws_s3_bucket_notification" "image_bucket_notification" {
+  bucket = aws_s3_bucket.image_bucket.id
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.process_image_lambda.arn
+    events              = ["s3:ObjectCreated:*"]
+  }
+
+  depends_on = [aws_lambda_permission.s3_to_lambda_image]
+}
+
+# Permiso para permitir que el bucket S3 invoque la función Lambda para procesar pedidos
+resource "aws_lambda_permission" "s3_to_lambda_image" {
+  statement_id  = "AllowS3InvokeLambdaimage"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.process_image_lambda.arn
+  principal     = "s3.amazonaws.com"
+  source_arn    = aws_s3_bucket.image_bucket.arn
+}
+output "image_bucket_name" {
+  value = aws_s3_bucket.image_bucket.id
 }
