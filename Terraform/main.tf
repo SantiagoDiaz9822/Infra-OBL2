@@ -1,49 +1,18 @@
-# Crear el Bucket S3 para el Sitio Estático
-resource "aws_s3_bucket" "static_website" {
-  bucket_prefix = "static-website"
+// Definir la región AWS
+provider "aws" {
+  region = "us-east-1"  // Ajusta esto según tu región preferida
 }
 
-# Subir archivos HTML estáticos al Bucket S3 
-resource "aws_s3_object" "index_html" {
-  bucket = aws_s3_bucket.static_website.id
-  key    = "index.html"
-  source = "../index.html"  # Ruta local del archivo HTML estático
+# ------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Modulo para del rol IAM
+module "iam_role" {
+  source             = "./modules/iam_role"
+  lambda_role_name   = "lambda_role"
+  assume_role_policy = data.aws_iam_policy_document.assume_role.json
 }
 
-# Crear la Función Lambda para servir el Sitio Estático
-resource "aws_lambda_function" "static_site_lambda" {
-  filename      = "./lambda_function.zip"
-  function_name = "static-site-lambda"
-  role          = aws_iam_role.lambda_role.arn
-  handler       = "lambda_function.lambda_handler"
-  runtime       = "python3.8"
-
-  environment {
-    variables = {
-      BUCKET_NAME = aws_s3_bucket.static_website.bucket
-    }
-  }
-}
-
-# Crear el rol IAM para la ejecución de la función Lambda 
-resource "aws_iam_role" "lambda_role" {
-  name               = "lambda_role"
-  assume_role_policy = jsonencode({
-    Version   = "2012-10-17",
-    Statement = [
-      {
-        Effect    = "Allow",
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        },
-        Action    = "sts:AssumeRole"
-      }
-    ]
-  })
-}
-
-# Documento de política para permitir a Lambda asumir el rol
-data "aws_iam_policy_document" "lambda_role_assume" {
+data "aws_iam_policy_document" "assume_role" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
@@ -53,85 +22,15 @@ data "aws_iam_policy_document" "lambda_role_assume" {
   }
 }
 
-# Configurar la Política de Bucket S3
-resource "aws_s3_bucket_policy" "lambda_access_policy" {
-  bucket = aws_s3_bucket.static_website.id
+# ------------------------------------------------------------------------------------------------------------------------------------------------
 
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Sid       = "PublicReadGetObject",
-        Effect    = "Allow",
-        Principal = "*",
-        Action    = "s3:GetObject",
-        Resource  = "${aws_s3_bucket.static_website.arn}/*"
-      }
-    ]
-  })
+# Modulo para el sitio web estático
+module "static_website" {
+  source               = "./modules/static_website"
+  lambda_role_arn      = module.iam_role.lambda_role.arn
 }
 
-# Crear un API Gateway HTTP no REST
-resource "aws_apigatewayv2_api" "static_site_api" {
-  name          = "static-site-api"
-  protocol_type = "HTTP"
-}
-
-# Crear una integración con la función Lambda
-resource "aws_apigatewayv2_integration" "lambda_integration" {
-  api_id                    = aws_apigatewayv2_api.static_site_api.id
-  integration_type          = "AWS_PROXY"
-  integration_method        = "POST"
-  integration_uri           = aws_lambda_function.static_site_lambda.invoke_arn
-}
-
-# Crear una ruta predeterminada para la API
-resource "aws_apigatewayv2_route" "api_route" {
-  api_id    = aws_apigatewayv2_api.static_site_api.id
-  route_key = "$default"
-
-  target = "integrations/${aws_apigatewayv2_integration.lambda_integration.id}"
-}
-
-# Crear un recurso de permiso para permitir a API Gateway invocar la función Lambda
-resource "aws_lambda_permission" "apigw" {
-  statement_id  = "AllowExecutionFromAPIGateway"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.static_site_lambda.function_name
-  principal     = "apigateway.amazonaws.com"
-
-  source_arn = "${aws_apigatewayv2_api.static_site_api.execution_arn}/*"
-}
-
-# Crear un despliegue de la API
-data "aws_region" "current" {}
-
-# Crear un recurso de rol IAM para la ejecución de la función Lambda
-resource "aws_iam_role" "lambda_exec" {
-  name = "lambda_exec_role"
-
-  assume_role_policy = jsonencode({
-    Version   ="2012-10-17",
-    Statement = [
-      {
-        Effect    = "Allow",
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        },
-        Action    = "sts:AssumeRole"
-      }
-    ]
-  })
-}
-
-# Adjuntar la política básica de ejecución de Lambda al rol
-resource "aws_iam_policy_attachment" "lambda_policy" {
-  name       = "lambda_policy_attach"
-  roles      = [aws_iam_role.lambda_exec.name]
-  policy_arn = aws_iam_policy.lambda_s3_policy.arn  # Cambiamos al ARN de la política de S3
-}
-
-# Crear la política de ejecución de Lambda
+# Crear la política de ejecución de Lambda para acceder a S3
 resource "aws_iam_policy" "lambda_s3_policy" {
   name        = "lambda-s3-policy"
   description = "Policy for Lambda to access S3"
@@ -145,36 +44,24 @@ resource "aws_iam_policy" "lambda_s3_policy" {
           "s3:GetObject",
           "s3:PutObject"
         ],
-        Resource = "${aws_s3_bucket.static_website.arn}/*"
+        Resource = "${module.static_website.static_website.arn}/*"
       }
     ]
   })
 }
 
-data "aws_iam_policy_document" "lambda_policy" {
-  statement {
-    actions   = ["lambda:InvokeFunction"]
-    resources = [aws_lambda_function.static_site_lambda.arn]
-  }
+# Adjuntar la política de permisos a la función Lambda para acceder a s3
+resource "aws_iam_role_policy_attachment" "lambda_s3_attachment" {
+  role       = module.iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_s3_policy.arn
 }
-
-# Crear el permiso para invocar la función Lambda
-resource "aws_lambda_permission" "invoke_lambda" {
-  statement_id  = "AllowAPIGatewayInvoke"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.static_site_lambda.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.static_site_api.execution_arn}/*"
-}
-
-# Probar el Sitio Institucional
-output "site_url" {
-  value = "${aws_apigatewayv2_api.static_site_api.api_endpoint}/site"
-}
-
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------
 
+# Crear la función Lambda para procesar los pedidos desde S3
+data "aws_sqs_queue" "notification_queue" {
+  name = "notification-queue"
+}
 
 # Crear una cola SQS para el servicio de notificación/mensajería desacoplado
 resource "aws_sqs_queue" "notification_queue" {
@@ -185,58 +72,7 @@ resource "aws_sqs_queue" "notification_queue" {
   visibility_timeout_seconds = 30
 }
 
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------
-
-
-# Crear el Bucket S3 para subir pedidos
-resource "aws_s3_bucket" "orders_bucket" {
-  bucket_prefix = "orders-bucket"
-}
-
-# Configurar la Política de Bucket S3
-resource "aws_s3_bucket_policy" "orders_bucket_policy" {
-  bucket = aws_s3_bucket.orders_bucket.id
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Sid       = "PublicReadGetObject",
-        Effect    = "Allow",
-        Principal = "*",
-        Action    = "s3:GetObject",
-        Resource  = "${aws_s3_bucket.orders_bucket.arn}/*"
-      }
-    ]
-  })
-}
-
-# Crear la función Lambda para procesar los pedidos desde S3
-data "aws_sqs_queue" "notification_queue" {
-  name = "notification-queue"
-}
-
-resource "aws_lambda_function" "process_orders_lambda" {
-  filename      = "./process_orders.zip"
-  function_name = "process-orders-lambda"
-  role          = aws_iam_role.lambda_role.arn
-  handler       = "process_orders.lambda_handler"
-  runtime       = "python3.8"
-
-  environment {
-    variables = {
-      SQS_QUEUE_URL  = data.aws_sqs_queue.notification_queue.url
-    }
-  }
-}
-
-output "SQS_QUEUE_URL" {
-  value = data.aws_sqs_queue.notification_queue.url
-
-}
-
-# Configurar la política de permisos para la función Lambda
+# Crear la política de permisos de Lambda para enviar mensajes a la cola SQS
 resource "aws_iam_policy" "lambda_sqs_policy" {
   name        = "lambda-sqs-policy"
   description = "Policy for Lambda to access SQS"
@@ -257,18 +93,27 @@ resource "aws_iam_policy" "lambda_sqs_policy" {
   })
 }
 
-# Adjuntar la política de permisos a la función Lambda
+# Adjuntar la política de permisos a la función Lambda para enviar mensajes a la cola SQS
 resource "aws_iam_role_policy_attachment" "lambda_sqs_attachment" {
-  role       = aws_iam_role.lambda_role.name
+  role       = module.iam_role.lambda_role.name
   policy_arn = aws_iam_policy.lambda_sqs_policy.arn
+}
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Modulo para bucket de pedidos
+module "orders" {
+  source               = "./modules/orders"
+  lambda_role_arn      = module.iam_role.lambda_role.arn
+  sqs_queue_url        = data.aws_sqs_queue.notification_queue.url
 }
 
 # Crear un trigger S3 para invocar la función Lambda al subir un objeto
 resource "aws_s3_bucket_notification" "orders_bucket_notification" {
-  bucket = aws_s3_bucket.orders_bucket.id
+  bucket = module.orders.orders_bucket.id
 
   lambda_function {
-    lambda_function_arn = aws_lambda_function.process_orders_lambda.arn
+    lambda_function_arn = module.orders.process_orders_lambda.arn
     events              = ["s3:ObjectCreated:*"]
     filter_suffix       = ".json"
   }
@@ -280,64 +125,26 @@ resource "aws_s3_bucket_notification" "orders_bucket_notification" {
 resource "aws_lambda_permission" "s3_to_lambda_orders" {
   statement_id  = "AllowS3InvokeLambdaOrders"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.process_orders_lambda.arn
+  function_name = module.orders.process_orders_lambda.arn
   principal     = "s3.amazonaws.com"
-  source_arn    = aws_s3_bucket.orders_bucket.arn
+  source_arn    = module.orders.orders_bucket.arn
 }
-output "order_bucket_name" {
-  value = aws_s3_bucket.orders_bucket.id
-}
-
-
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------
 
-
-
-# Crear el Bucket S3 para subir imagenes
-resource "aws_s3_bucket" "image_bucket" {
-  bucket_prefix = "image-bucket"
-}
-
-# Configurar la Política de Bucket S3
-resource "aws_s3_bucket_policy" "image_bucket_policy" {
-  bucket = aws_s3_bucket.image_bucket.id
-
-   policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Sid       = "PublicReadGetObject",
-        Effect    = "Allow",
-        Principal = "*",
-        Action    = "s3:GetObject",
-        Resource  = "${aws_s3_bucket.image_bucket.arn}/*"
-      }
-    ]
-  })
-  
-}
-
-resource "aws_lambda_function" "process_image_lambda" {
-  filename      = "./process_image.zip"
-  function_name = "process-image-lambda"
-  role          = aws_iam_role.lambda_role.arn
-  handler       = "process_image.lambda_handler"
-  runtime       = "python3.8"
-
-  environment {
-    variables = {
-      SQS_QUEUE_URL  = data.aws_sqs_queue.notification_queue.url
-    }
-  }
+# Modulo para bucket de imagenes
+module "images" {
+  source               = "./modules/images"
+  lambda_role_arn      = module.iam_role.lambda_role.arn
+  sqs_queue_url        = data.aws_sqs_queue.notification_queue.url
 }
 
 # Crear un trigger S3 para invocar la función Lambda al subir un objeto
 resource "aws_s3_bucket_notification" "image_bucket_notification" {
-  bucket = aws_s3_bucket.image_bucket.id
+  bucket = module.images.image_bucket.id
 
   lambda_function {
-    lambda_function_arn = aws_lambda_function.process_image_lambda.arn
+    lambda_function_arn = module.images.process_image_lambda.arn
     events              = ["s3:ObjectCreated:*"]
   }
 
@@ -348,29 +155,17 @@ resource "aws_s3_bucket_notification" "image_bucket_notification" {
 resource "aws_lambda_permission" "s3_to_lambda_image" {
   statement_id  = "AllowS3InvokeLambdaimage"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.process_image_lambda.arn
+  function_name = module.images.process_image_lambda.arn
   principal     = "s3.amazonaws.com"
-  source_arn    = aws_s3_bucket.image_bucket.arn
-}
-output "image_bucket_name" {
-  value = aws_s3_bucket.image_bucket.id
+  source_arn    = module.images.image_bucket.arn
 }
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------
 
-
-# Añadir monitoreo Centralizado de Logs con CloudWatch
-resource "aws_cloudwatch_log_group" "static_site_lambda_log_group" {
-  name = "/aws/lambda/${aws_lambda_function.static_site_lambda.function_name}"
-  retention_in_days = 14
-}
-
-resource "aws_cloudwatch_log_group" "process_image_lambda_log_group" {
-  name = "/aws/lambda/${aws_lambda_function.process_image_lambda.function_name}"
-  retention_in_days = 14
-}
-
-resource "aws_cloudwatch_log_group" "process_orders_lambda_log_group" {
-  name = "/aws/lambda/${aws_lambda_function.process_orders_lambda.function_name}"
-  retention_in_days = 14
+# Modulo para el logging
+module "logging" {
+  source                        = "./modules/logging"
+  static_lambda_function_name   = module.static_website.static_site_lambda.function_name
+  process_image_lambda_function_name = module.images.process_image_lambda.function_name
+  process_orders_lambda_function_name = module.orders.process_orders_lambda.function_name
 }
