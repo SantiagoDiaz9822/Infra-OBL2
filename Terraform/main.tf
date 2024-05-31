@@ -1,93 +1,3 @@
-# Variables locales
-locals {
-  VPC1ID = "vpc-0ccc796febac1affa"
-
-  EC2_INSTANCES = [
-    {
-      ami_id = "ami-051f8a213df8bc089",
-      instance_type = "t2.micro",
-      instance_name = "Public instance",
-      instance_count = 1,
-      public = true,
-      enable_ipv6 = true,
-      security_group_rules = {
-        ingress = [
-          {
-            from_port         = 22,
-            to_port           = 22,
-            protocol          = "tcp",
-            cidr_blocks       = ["0.0.0.0/0"],
-            ipv6_cidr_blocks  = ["::/0"]
-          },
-          {
-            from_port         = 80,
-            to_port           = 80,
-            protocol          = "tcp",
-            cidr_blocks       = ["0.0.0.0/0"],
-            ipv6_cidr_blocks  = ["::/0"]
-          }
-        ],
-        egress = [
-          {
-            from_port         = 0,
-            to_port           = 0,
-            protocol          = "-1",
-            cidr_blocks       = ["0.0.0.0/0"],
-            ipv6_cidr_blocks  = ["::/0"]
-          }
-        ]
-      }
-    },
-    {
-      ami_id = "ami-058bd2d568351da34",
-      instance_type = "t2.micro",
-      instance_name = "Private instance",
-      instance_count = 1,
-      public = false,
-      enable_ipv6 = false,
-      security_group_rules = {
-        ingress = [
-          {
-            from_port         = 22,
-            to_port           = 22,
-            protocol          = "tcp",
-            cidr_blocks       = ["0.0.0.0/0"],
-            ipv6_cidr_blocks  = ["::/0"]
-          }
-        ],
-        egress = [
-          {
-            from_port         = 0,
-            to_port           = 0,
-            protocol          = "-1",
-            cidr_blocks       = ["0.0.0.0/0"],
-            ipv6_cidr_blocks  = ["::/0"]
-          }
-        ]
-      }
-    }
-  ]
-}
-
-# Recuperar información de la VPC y subredes
-data "aws_vpc" "VPC1" {
-  id = local.VPC1ID
-}
-
-data "aws_subnets" "Private-subnets" {
-  filter {
-    name   = "tag:Name"
-    values = ["subnet-private-1*"]
-  }
-}
-
-data "aws_subnets" "Public-subnets" {
-  filter {
-    name   = "tag:Name"
-    values = ["subnet-public-1*"]
-  }
-}
-
 # Crear el Bucket S3 para el Sitio Estático
 resource "aws_s3_bucket" "static_website" {
   bucket_prefix = "static-website"
@@ -165,22 +75,6 @@ resource "aws_s3_bucket_policy" "lambda_access_policy" {
 resource "aws_apigatewayv2_api" "static_site_api" {
   name          = "static-site-api"
   protocol_type = "HTTP"
-}
-
-# Crear las instancias EC2
-module "ec2" {
-  for_each = { for vm in local.EC2_INSTANCES : vm.instance_name => vm }
-  source   = "./modules/ec2"
-
-  subnet_id            = each.value.public ? data.aws_subnets.Public-subnets.ids[0] : data.aws_subnets.Private-subnets.ids[0]
-  ami_id               = each.value.ami_id
-  instance_type        = each.value.instance_type
-  instance_name        = each.value.instance_name
-  instance_count       = each.value.instance_count
-  ssh_bucket           = aws_s3_bucket.static_website.id
-  enable_ipv6          = each.value.enable_ipv6
-  vpc_id               = data.aws_vpc.VPC1.id
-  security_group_rules = each.value.security_group_rules
 }
 
 # Crear una integración con la función Lambda
@@ -332,7 +226,6 @@ resource "aws_lambda_function" "process_orders_lambda" {
 
   environment {
     variables = {
-      S3_BUCKET_NAME = aws_s3_bucket.orders_bucket.bucket
       SQS_QUEUE_URL  = data.aws_sqs_queue.notification_queue.url
     }
   }
@@ -434,7 +327,6 @@ resource "aws_lambda_function" "process_image_lambda" {
 
   environment {
     variables = {
-      S3_BUCKET_NAME = aws_s3_bucket.image_bucket.bucket
       SQS_QUEUE_URL  = data.aws_sqs_queue.notification_queue.url
     }
   }
@@ -462,4 +354,23 @@ resource "aws_lambda_permission" "s3_to_lambda_image" {
 }
 output "image_bucket_name" {
   value = aws_s3_bucket.image_bucket.id
+}
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+# Añadir monitoreo Centralizado de Logs con CloudWatch
+resource "aws_cloudwatch_log_group" "static_site_lambda_log_group" {
+  name = "/aws/lambda/${aws_lambda_function.static_site_lambda.function_name}"
+  retention_in_days = 14
+}
+
+resource "aws_cloudwatch_log_group" "process_image_lambda_log_group" {
+  name = "/aws/lambda/${aws_lambda_function.process_image_lambda.function_name}"
+  retention_in_days = 14
+}
+
+resource "aws_cloudwatch_log_group" "process_orders_lambda_log_group" {
+  name = "/aws/lambda/${aws_lambda_function.process_orders_lambda.function_name}"
+  retention_in_days = 14
 }
