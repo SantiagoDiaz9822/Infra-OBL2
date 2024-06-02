@@ -3,6 +3,7 @@ resource "aws_s3_bucket" "image_bucket" {
   bucket_prefix = "image-bucket"
 }
 
+# Configurar la Política de Bucket S3
 resource "aws_s3_bucket_public_access_block" "block_public_acls" {
   bucket = aws_s3_bucket.image_bucket.id
 
@@ -12,7 +13,6 @@ resource "aws_s3_bucket_public_access_block" "block_public_acls" {
   ignore_public_acls      = true 
 }
 
-# Configurar la Política de Bucket S3
 resource "aws_s3_bucket_policy" "image_bucket_policy" {
   bucket = aws_s3_bucket.image_bucket.id
 

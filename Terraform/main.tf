@@ -1,6 +1,6 @@
 // Definir la región AWS
 provider "aws" {
-  region = "us-east-1"  // Ajusta esto según tu región preferida
+  region = "us-east-1" 
 }
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------

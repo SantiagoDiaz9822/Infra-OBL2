@@ -3,6 +3,7 @@ resource "aws_s3_bucket" "orders_bucket" {
   bucket_prefix = "orders-bucket"
 }
 
+# Configurar la Política de Bucket S3
 resource "aws_s3_bucket_public_access_block" "block_public_acls" {
   bucket = aws_s3_bucket.orders_bucket.id
 
@@ -12,8 +13,6 @@ resource "aws_s3_bucket_public_access_block" "block_public_acls" {
   ignore_public_acls      = true 
 }
 
-
-# Configurar la Política de Bucket S3
 resource "aws_s3_bucket_policy" "orders_bucket_policy" {
   bucket = aws_s3_bucket.orders_bucket.id
 

@@ -10,21 +10,6 @@ resource "aws_s3_object" "index_html" {
   source = "../index.html"  # Ruta local del archivo HTML estático
 }
 
-# Crear la Función Lambda para servir el Sitio Estático
-resource "aws_lambda_function" "static_site_lambda" {
-  filename      = "./lambda_function.zip"
-  function_name = "static-site-lambda"
-  role          = var.lambda_role_arn
-  handler       = "lambda_function.lambda_handler"
-  runtime       = "python3.8"
-
-  environment {
-    variables = {
-      BUCKET_NAME = aws_s3_bucket.static_website.bucket
-    }
-  }
-}
-
 # Configurar la Política de Bucket S3
 resource "aws_s3_bucket_public_access_block" "block_public_acls" {
   bucket = aws_s3_bucket.static_website.id
@@ -83,14 +68,19 @@ resource "aws_apigatewayv2_stage" "default" {
   auto_deploy = true
 }
 
-# Crear un recurso de permiso para permitir a API Gateway invocar la función Lambda
-resource "aws_lambda_permission" "apigw" {
-  statement_id  = "AllowExecutionFromAPIGateway"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.static_site_lambda.function_name
-  principal     = "apigateway.amazonaws.com"
+# Crear la Función Lambda para servir el Sitio Estático
+resource "aws_lambda_function" "static_site_lambda" {
+  filename      = "./lambda_function.zip"
+  function_name = "static-site-lambda"
+  role          = var.lambda_role_arn
+  handler       = "lambda_function.lambda_handler"
+  runtime       = "python3.8"
 
-  source_arn = "${aws_apigatewayv2_api.static_site_api.execution_arn}/*"
+  environment {
+    variables = {
+      BUCKET_NAME = aws_s3_bucket.static_website.bucket
+    }
+  }
 }
 
 # Crear el permiso para invocar la función Lambda
