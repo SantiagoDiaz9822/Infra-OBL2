@@ -70,10 +70,10 @@ resource "aws_apigatewayv2_stage" "default" {
 
 # Crear la Función Lambda para servir el Sitio Estático
 resource "aws_lambda_function" "static_site_lambda" {
-  filename      = "./process_static_website.zip"
+  filename      = "./static-site-lambda.zip"
   function_name = "static-site-lambda"
   role          = var.lambda_role_arn
-  handler       = "process_static_website.lambda_handler"
+  handler       = "static-site-lambda.lambda_handler"
   runtime       = "python3.8"
 
   environment {
