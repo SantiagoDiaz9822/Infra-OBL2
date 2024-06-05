@@ -1,11 +1,11 @@
 // Definir la región AWS
 provider "aws" {
-  region = "us-east-1" 
+  region = "us-east-1"
 }
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------
 
-# Modulo para del rol IAM
+# Módulo para del rol IAM
 module "iam_role" {
   source             = "./modules/iam_role"
   lambda_role_name   = "lambda_role"
@@ -24,10 +24,10 @@ data "aws_iam_policy_document" "assume_role" {
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------
 
-# Modulo para el sitio web estático
+# Módulo para el sitio web estático
 module "static_website" {
-  source               = "./modules/static_website"
-  lambda_role_arn      = module.iam_role.lambda_role.arn
+  source           = "./modules/static_website"
+  lambda_role_arn  = module.iam_role.lambda_role.arn
 }
 
 # Crear la política de ejecución de Lambda para acceder a S3
@@ -58,17 +58,12 @@ resource "aws_iam_role_policy_attachment" "lambda_s3_attachment" {
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------
 
-# Crear la función Lambda para procesar los pedidos desde S3
-data "aws_sqs_queue" "notification_queue" {
-  name = "notification-queue"
-}
-
-# Crear una cola SQS para el servicio de notificación/mensajería desacoplado
+# Crear la cola SQS para el servicio de notificación/mensajería desacoplado
 resource "aws_sqs_queue" "notification_queue" {
-  name                      = "notification-queue"
-  delay_seconds             = 0
-  max_message_size          = 262144
-  message_retention_seconds = 345600
+  name                       = "notification-queue"
+  delay_seconds              = 0
+  max_message_size           = 262144
+  message_retention_seconds  = 345600
   visibility_timeout_seconds = 30
 }
 
@@ -85,9 +80,11 @@ resource "aws_iam_policy" "lambda_sqs_policy" {
         Action   = [
           "sqs:SendMessage",
           "sqs:ReceiveMessage",
-          "sqs:DeleteMessage"
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl"
         ],
-        Resource = "${aws_sqs_queue.notification_queue.arn}/*"
+        Resource = "${aws_sqs_queue.notification_queue.arn}"
       }
     ]
   })
@@ -101,11 +98,11 @@ resource "aws_iam_role_policy_attachment" "lambda_sqs_attachment" {
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------
 
-# Modulo para bucket de pedidos
+# Módulo para bucket de pedidos
 module "orders" {
-  source               = "./modules/orders"
-  lambda_role_arn      = module.iam_role.lambda_role.arn
-  sqs_queue_url        = data.aws_sqs_queue.notification_queue.url
+  source          = "./modules/orders"
+  lambda_role_arn = module.iam_role.lambda_role.arn
+  sqs_queue_url   = aws_sqs_queue.notification_queue.url
 }
 
 # Crear un trigger S3 para invocar la función Lambda al subir un objeto
@@ -114,8 +111,8 @@ resource "aws_s3_bucket_notification" "orders_bucket_notification" {
 
   lambda_function {
     lambda_function_arn = module.orders.process_orders_lambda.arn
-    events              = ["s3:ObjectCreated:*"]
-    filter_suffix       = ".json"
+    events        = ["s3:ObjectCreated:*"]
+    filter_suffix = ".json"
   }
 
   depends_on = [aws_lambda_permission.s3_to_lambda_orders]
@@ -132,11 +129,11 @@ resource "aws_lambda_permission" "s3_to_lambda_orders" {
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------
 
-# Modulo para bucket de imagenes
+# Módulo para bucket de imágenes
 module "images" {
-  source               = "./modules/images"
-  lambda_role_arn      = module.iam_role.lambda_role.arn
-  sqs_queue_url        = data.aws_sqs_queue.notification_queue.url
+  source          = "./modules/images"
+  lambda_role_arn = module.iam_role.lambda_role.arn
+  sqs_queue_url   = aws_sqs_queue.notification_queue.url
 }
 
 # Crear un trigger S3 para invocar la función Lambda al subir un objeto
@@ -151,9 +148,9 @@ resource "aws_s3_bucket_notification" "image_bucket_notification" {
   depends_on = [aws_lambda_permission.s3_to_lambda_image]
 }
 
-# Permiso para permitir que el bucket S3 invoque la función Lambda para procesar pedidos
+# Permiso para permitir que el bucket S3 invoque la función Lambda para procesar imágenes
 resource "aws_lambda_permission" "s3_to_lambda_image" {
-  statement_id  = "AllowS3InvokeLambdaimage"
+  statement_id  = "AllowS3InvokeLambdaImage"
   action        = "lambda:InvokeFunction"
   function_name = module.images.process_image_lambda.arn
   principal     = "s3.amazonaws.com"
@@ -162,10 +159,10 @@ resource "aws_lambda_permission" "s3_to_lambda_image" {
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------
 
-# Modulo para el logging
+# Módulo para el logging
 module "logging" {
-  source                        = "./modules/logging"
-  static_lambda_function_name   = module.static_website.static_site_lambda.function_name
-  process_image_lambda_function_name = module.images.process_image_lambda.function_name
+  source                              = "./modules/logging"
+  static_lambda_function_name         = module.static_website.static_site_lambda.function_name
+  process_image_lambda_function_name  = module.images.process_image_lambda.function_name
   process_orders_lambda_function_name = module.orders.process_orders_lambda.function_name
 }
